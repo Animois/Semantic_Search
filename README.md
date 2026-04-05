@@ -1,43 +1,48 @@
-# Semantic Programming Search (React + Tailwind)
+# Semantic Programming Search
 
-Modern React web application with **User Panel** and **Admin Panel** for semantic programming search.
+A React-based semantic programming search web app with **User Panel** and **Admin Panel**.
+
+## Why this version works immediately
+
+This project now runs as a **standalone single-page app** directly from `index.html` using CDN-delivered React/Tailwind/Babel, so you can see the UI without requiring `npm install`.
 
 ## Features
 
-- Login / signup with role selection (`user` or `admin`).
-- User panel with large semantic search box.
-- Embedding generation using **GitHub Models** (with local fallback embedding when token is missing or request fails).
-- Cosine similarity search over a local dataset file (`public/data/stackoverflow_3000.json`).
-- Admin panel to add new question/answer records to the in-memory index.
+- Login / signup with role selection (`user`, `admin`).
+- User panel with large programming-question search input.
+- Search text is converted to embeddings using GitHub Models when a token is provided (`window.GITHUB_MODELS_TOKEN`), otherwise deterministic local fallback embeddings are used.
+- Cosine similarity ranking against `public/data/stackoverflow_3000.json` (3000 records).
+- Admin panel to add new records into the running search index.
 
-## Dataset
+## Run
 
-The project includes a `dataset:refresh` script that attempts to fetch 3000 rows from:
+### Option 1 (recommended): local static server
 
-`https://huggingface.co/datasets/MartinElMolon/stackoverflow_preguntas_con_embeddings`
+```bash
+python -m http.server 8000
+```
 
-If the endpoint is unavailable in your environment, the script safely generates a 3000-row fallback dataset so the app remains runnable.
+Then open: `http://localhost:8000`
 
-## Run locally
+### Option 2: Vite workflow (optional)
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Optional environment variables
+## Dataset
 
-Create `.env`:
+Dataset source requested:
 
-```bash
-VITE_GITHUB_TOKEN=your_github_token
-VITE_GITHUB_EMBEDDING_MODEL=text-embedding-3-small
-```
+`https://huggingface.co/datasets/MartinElMolon/stackoverflow_preguntas_con_embeddings`
 
-With token set, embeddings are requested from `https://models.inference.ai.azure.com/embeddings`.
-
-## Dataset refresh
+Refresh script (fetches from HF when possible, otherwise generates fallback rows):
 
 ```bash
-npm run dataset:refresh
+node scripts/fetchDataset.mjs
 ```
+
+Output file:
+
+`public/data/stackoverflow_3000.json`
