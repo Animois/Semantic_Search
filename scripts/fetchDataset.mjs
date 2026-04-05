@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const OUTPUT_PATH = path.resolve('src/data/stackoverflow_3000.json');
+const OUTPUT_PATH = path.resolve('public/data/stackoverflow_3000.json');
 const DATASET_URL =
   'https://datasets-server.huggingface.co/rows?dataset=MartinElMolon%2Fstackoverflow_preguntas_con_embeddings&config=default&split=train&offset=0&length=3000';
 

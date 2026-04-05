@@ -4,9 +4,294 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Semantic Programming Search</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
   <body class="bg-slate-950">
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
+
+      const USER_KEY = 'semantic-search-users';
+      const DATASET_FILES = ['./public/data/stackoverflow_3000.json', './data/stackoverflow_3000.json'];
+
+      const normalize = (vector) => {
+        const mag = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+        if (!mag) return vector;
+        return vector.map((value) => value / mag);
+      };
+
+      const fallbackEmbedding = (text, dimensions = 32) => {
+        const output = new Array(dimensions).fill(0);
+        for (let i = 0; i < text.length; i += 1) {
+          const code = text.charCodeAt(i);
+          output[i % dimensions] += Math.sin(code * 0.17) + Math.cos(code * 0.13);
+        }
+        return normalize(output);
+      };
+
+      const cosineSimilarity = (left, right) => {
+        const length = Math.min(left.length, right.length);
+        let dot = 0;
+        let leftMag = 0;
+        let rightMag = 0;
+
+        for (let i = 0; i < length; i += 1) {
+          dot += left[i] * right[i];
+          leftMag += left[i] * left[i];
+          rightMag += right[i] * right[i];
+        }
+
+        if (!leftMag || !rightMag) return 0;
+        return dot / (Math.sqrt(leftMag) * Math.sqrt(rightMag));
+      };
+
+      const createEmbedding = async (text) => {
+        const token = window.GITHUB_MODELS_TOKEN || '';
+        const model = window.GITHUB_EMBEDDING_MODEL || 'text-embedding-3-small';
+
+        if (!token) return fallbackEmbedding(text);
+
+        try {
+          const response = await fetch('https://models.inference.ai.azure.com/embeddings', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ input: text, model }),
+          });
+
+          if (!response.ok) throw new Error(`GitHub Models failed: ${response.status}`);
+          const payload = await response.json();
+          const vector = payload?.data?.[0]?.embedding;
+          if (!vector) throw new Error('No embedding returned');
+          return normalize(vector);
+        } catch {
+          return fallbackEmbedding(text);
+        }
+      };
+
+      const defaultUsers = [{ userId: 'admin', password: 'admin123', role: 'admin' }];
+
+      function App() {
+        const [users, setUsers] = useState(() => {
+          try {
+            const raw = localStorage.getItem(USER_KEY);
+            if (!raw) {
+              localStorage.setItem(USER_KEY, JSON.stringify(defaultUsers));
+              return defaultUsers;
+            }
+            return JSON.parse(raw);
+          } catch {
+            return defaultUsers;
+          }
+        });
+
+        const [activeUser, setActiveUser] = useState(null);
+        const [dataset, setDataset] = useState([]);
+        const [query, setQuery] = useState('');
+        const [results, setResults] = useState([]);
+        const [loading, setLoading] = useState(true);
+        const [info, setInfo] = useState('Loading dataset...');
+
+        useEffect(() => {
+          const load = async () => {
+            for (const path of DATASET_FILES) {
+              try {
+                const response = await fetch(path);
+                if (!response.ok) continue;
+                const data = await response.json();
+                setDataset(data);
+                setInfo(`Loaded ${data.length} records from ${path}`);
+                setLoading(false);
+                return;
+              } catch {}
+            }
+
+            setInfo('Could not load dataset file. Run from project root with a local server (e.g. `python -m http.server`).');
+            setLoading(false);
+          };
+
+          load();
+        }, []);
+
+        const stats = useMemo(() => {
+          const tagCount = dataset.reduce((sum, row) => sum + (row.tags || []).length, 0);
+          return { rows: dataset.length, avgTags: dataset.length ? (tagCount / dataset.length).toFixed(2) : '0.00' };
+        }, [dataset]);
+
+        const signup = (form) => {
+          if (users.some((u) => u.userId === form.userId)) return { ok: false, message: 'User already exists' };
+          const next = [...users, form];
+          setUsers(next);
+          localStorage.setItem(USER_KEY, JSON.stringify(next));
+          setActiveUser(form);
+          return { ok: true };
+        };
+
+        const login = ({ userId, password }) => {
+          const user = users.find((u) => u.userId === userId && u.password === password);
+          if (!user) return { ok: false, message: 'Invalid user id/password' };
+          setActiveUser(user);
+          return { ok: true };
+        };
+
+        const addRecord = async ({ question, answer, tags }) => {
+          const embedding = await createEmbedding(question);
+          setDataset((prev) => [{ id: crypto.randomUUID(), question, answer, tags, embedding }, ...prev]);
+        };
+
+        const search = async (e) => {
+          e.preventDefault();
+          if (!query.trim() || !dataset.length) return;
+          const qEmbedding = await createEmbedding(query);
+          const ranked = dataset
+            .map((row) => ({ ...row, similarity: cosineSimilarity(qEmbedding, row.embedding || fallbackEmbedding(row.question)) }))
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, 5);
+          setResults(ranked);
+        };
+
+        if (!activeUser) return <AuthView onLogin={login} onSignup={signup} info={info} loading={loading} />;
+
+        return (
+          <main className="min-h-screen bg-slate-100">
+            <header className="bg-slate-950 text-slate-100 px-6 py-4 shadow-xl">
+              <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h1 className="font-bold text-xl">Semantic Search Workspace</h1>
+                  <p className="text-sm text-slate-400">User: <span className="text-cyan-300">{activeUser.userId}</span> ({activeUser.role})</p>
+                </div>
+                <div className="flex gap-2 text-sm items-center">
+                  <span className="bg-white/10 px-3 py-2 rounded-lg">Rows: {stats.rows}</span>
+                  <span className="bg-white/10 px-3 py-2 rounded-lg">Avg tags: {stats.avgTags}</span>
+                  <button className="bg-cyan-400 px-3 py-2 rounded-lg text-slate-950 font-semibold" onClick={() => setActiveUser(null)}>Logout</button>
+                </div>
+              </div>
+            </header>
+
+            <section className="max-w-6xl mx-auto p-6">
+              {activeUser.role === 'admin' ? (
+                <AdminView dataset={dataset} onAdd={addRecord} />
+              ) : (
+                <UserView query={query} setQuery={setQuery} onSearch={search} results={results} />
+              )}
+            </section>
+          </main>
+        );
+      }
+
+      function AuthView({ onLogin, onSignup, info, loading }) {
+        const [mode, setMode] = useState('login');
+        const [form, setForm] = useState({ userId: '', password: '', role: 'user' });
+        const [error, setError] = useState('');
+
+        const submit = (e) => {
+          e.preventDefault();
+          const fn = mode === 'login' ? onLogin : onSignup;
+          const res = fn(form);
+          if (!res.ok) setError(res.message);
+        };
+
+        return (
+          <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-purple-950 text-slate-100 flex items-center justify-center p-6">
+            <div className="w-full max-w-xl rounded-3xl bg-white/10 backdrop-blur-xl border border-white/20 p-8 shadow-2xl">
+              <h1 className="text-3xl font-bold mb-2">Semantic Programming Search</h1>
+              <p className="text-slate-300 mb-2">Login or create account to continue.</p>
+              <p className="text-xs text-cyan-200 mb-6">{loading ? 'Loading dataset...' : info}</p>
+
+              <div className="flex gap-2 mb-5">
+                <button type="button" onClick={() => setMode('login')} className={`px-4 py-2 rounded-lg ${mode === 'login' ? 'bg-cyan-500 text-slate-950' : 'bg-white/10'}`}>Login</button>
+                <button type="button" onClick={() => setMode('signup')} className={`px-4 py-2 rounded-lg ${mode === 'signup' ? 'bg-cyan-500 text-slate-950' : 'bg-white/10'}`}>Sign up</button>
+              </div>
+
+              <form onSubmit={submit} className="space-y-3">
+                <input className="w-full rounded-xl p-3 bg-slate-900/80 border border-slate-700" placeholder="User ID" value={form.userId} onChange={(e) => setForm({ ...form, userId: e.target.value })} required />
+                <input type="password" className="w-full rounded-xl p-3 bg-slate-900/80 border border-slate-700" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required />
+                {mode === 'signup' && (
+                  <select className="w-full rounded-xl p-3 bg-slate-900/80 border border-slate-700" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                    <option value="user">User panel</option>
+                    <option value="admin">Admin panel</option>
+                  </select>
+                )}
+                {!!error && <p className="text-sm text-rose-300">{error}</p>}
+                <button className="w-full py-3 rounded-xl bg-cyan-400 text-slate-950 font-semibold">{mode === 'login' ? 'Login' : 'Create account'}</button>
+              </form>
+            </div>
+          </div>
+        );
+      }
+
+      function UserView({ query, setQuery, onSearch, results }) {
+        return (
+          <div className="space-y-6">
+            <div className="bg-white rounded-2xl shadow p-6">
+              <h2 className="text-2xl font-semibold">Ask programming question</h2>
+              <p className="text-slate-600 mt-2">Examples: How to declare array in python, How to do binary search in cpp</p>
+              <form onSubmit={onSearch} className="mt-4">
+                <textarea className="w-full border-2 border-cyan-400 rounded-xl p-4 min-h-36" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Type question..." />
+                <button className="mt-3 px-5 py-3 rounded-xl bg-slate-900 text-white font-semibold">Find Best Match</button>
+              </form>
+            </div>
+
+            <div className="space-y-3">
+              {results.map((row, idx) => (
+                <article key={row.id || idx} className="bg-white rounded-2xl border border-slate-200 p-4">
+                  <div className="flex justify-between gap-2">
+                    <h3 className="font-semibold">Result #{idx + 1}</h3>
+                    <span className="text-xs bg-cyan-100 text-cyan-800 px-2 py-1 rounded">Similarity {(row.similarity * 100).toFixed(2)}%</span>
+                  </div>
+                  <p className="mt-2 text-slate-900">{row.question}</p>
+                  <pre className="mt-2 bg-slate-900 text-cyan-100 rounded-lg p-3 text-sm overflow-x-auto">{row.answer}</pre>
+                </article>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      function AdminView({ dataset, onAdd }) {
+        const [form, setForm] = useState({ question: '', answer: '', tags: '' });
+
+        const submit = (e) => {
+          e.preventDefault();
+          onAdd({ question: form.question, answer: form.answer, tags: form.tags.split(',').map((v) => v.trim()).filter(Boolean) });
+          setForm({ question: '', answer: '', tags: '' });
+        };
+
+        return (
+          <div className="grid lg:grid-cols-2 gap-6">
+            <div className="bg-white rounded-2xl shadow p-6">
+              <h2 className="text-2xl font-semibold">Admin Panel</h2>
+              <p className="text-slate-600 mt-2">Add and manage programming QA rows.</p>
+              <form onSubmit={submit} className="mt-4 space-y-3">
+                <input className="w-full border rounded-xl p-3" placeholder="Question" value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} required />
+                <textarea className="w-full border rounded-xl p-3 min-h-28" placeholder="Answer" value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} required />
+                <input className="w-full border rounded-xl p-3" placeholder="Tags comma separated" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} />
+                <button className="w-full py-3 rounded-xl bg-cyan-500 text-slate-950 font-semibold">Add row</button>
+              </form>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow p-6">
+              <h3 className="text-lg font-semibold mb-3">Latest Rows</h3>
+              <ul className="space-y-2 max-h-[540px] overflow-auto">
+                {dataset.slice(0, 10).map((row) => (
+                  <li key={row.id} className="border rounded-lg p-3">
+                    <p className="font-medium text-slate-800">{row.question}</p>
+                    <p className="text-xs text-slate-500 mt-1">{(row.tags || []).join(', ')}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
   </body>
 </html>

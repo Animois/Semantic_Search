@@ -1,13 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AuthScreen from './components/AuthScreen';
 import UserPanel from './components/UserPanel';
 import AdminPanel from './components/AdminPanel';
-import datasetSource from './data/stackoverflow_3000.json';
 import { createEmbedding } from './lib/embedding';
 
 const USER_KEY = 'semantic-search-users';
+const DATASET_PATH = '/data/stackoverflow_3000.json';
 
 const getStoredUsers = () => {
+  if (typeof window === 'undefined') {
+    return [{ userId: 'admin', password: 'admin123', role: 'admin' }];
+  }
+
   const fallback = [{ userId: 'admin', password: 'admin123', role: 'admin' }];
   const raw = localStorage.getItem(USER_KEY);
   if (!raw) {
@@ -25,7 +29,26 @@ const getStoredUsers = () => {
 export default function App() {
   const [users, setUsers] = useState(getStoredUsers);
   const [activeUser, setActiveUser] = useState(null);
-  const [dataset, setDataset] = useState(datasetSource);
+  const [dataset, setDataset] = useState([]);
+  const [datasetError, setDatasetError] = useState('');
+  const [isDatasetLoading, setIsDatasetLoading] = useState(true);
+
+  useEffect(() => {
+    const loadDataset = async () => {
+      try {
+        const response = await fetch(DATASET_PATH);
+        if (!response.ok) throw new Error(`Failed to load dataset (${response.status})`);
+        const data = await response.json();
+        setDataset(data);
+      } catch (error) {
+        setDatasetError(error.message);
+      } finally {
+        setIsDatasetLoading(false);
+      }
+    };
+
+    loadDataset();
+  }, []);
 
   const login = ({ userId, password }) => {
     const user = users.find((item) => item.userId === userId && item.password === password);
@@ -60,6 +83,29 @@ export default function App() {
       avgTags: (tagCount / dataset.length || 0).toFixed(2),
     };
   }, [dataset]);
+
+  if (isDatasetLoading) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-100 grid place-items-center p-6">
+        <div className="text-center">
+          <h1 className="text-2xl font-semibold">Loading semantic dataset...</h1>
+          <p className="text-slate-400 mt-2">Please wait while we prepare 3000 programming records.</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (datasetError) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-100 grid place-items-center p-6">
+        <div className="max-w-xl text-center rounded-2xl border border-rose-400/40 bg-rose-400/10 p-6">
+          <h1 className="text-2xl font-semibold text-rose-200">Dataset failed to load</h1>
+          <p className="text-rose-100 mt-2">{datasetError}</p>
+          <p className="text-slate-300 mt-4">Make sure `public/data/stackoverflow_3000.json` exists and restart the app.</p>
+        </div>
+      </main>
+    );
+  }
 
   if (!activeUser) {
     return <AuthScreen onLogin={login} onSignUp={signUp} />;
